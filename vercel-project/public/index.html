@@ -79,6 +79,14 @@
   .row2{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
   .row3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;}
   @media (max-width:700px){ .row3{grid-template-columns:1fr;} }
+  .row4{display:grid;grid-template-columns:1fr 1.4fr 1.4fr 1fr;gap:12px;}
+  @media (max-width:900px){ .row4{grid-template-columns:1fr 1fr;} }
+  .chips{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px;}
+  .chip{padding:6px 12px;border:1px solid var(--line);border-radius:999px;font-size:13px;font-weight:600;color:var(--muted);cursor:pointer;background:#fff;user-select:none;}
+  .chip span{font-weight:700;margin-left:4px;opacity:.7;}
+  .chip.active{background:var(--green);border-color:var(--green);color:#fff;}
+  .group-head{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--green);margin:12px 0 2px;}
+
   .field{margin-bottom:12px;}
   .field label{
     display:block;font-size:12.5px;color:var(--muted);margin-bottom:5px;font-weight:600;
@@ -214,7 +222,17 @@
   <div id="viewEmployees">
     <div class="card">
       <h2>Add Employee</h2>
-      <div class="row3">
+      <div class="row4">
+        <div class="field">
+          <label>Category</label>
+          <select id="newEmpCategory">
+            <option value="">Select…</option>
+            <option>Teacher</option>
+            <option>Admin</option>
+            <option>Nannies</option>
+            <option>Transport</option>
+          </select>
+        </div>
         <div class="field">
           <label>Name</label>
           <input id="newEmpName" type="text" placeholder="e.g. Mr. Biswajit Dutta">
@@ -234,14 +252,22 @@
           Import from Excel / CSV
           <input id="importFile" type="file" accept=".xlsx,.xls,.csv" style="display:none;" onchange="handleImportFile(event)">
         </label>
+        <select id="importCategory" title="Used for rows that have no Category value" style="padding:10px 12px;border:1px solid var(--line);border-radius:9px;font-size:13.5px;background:#fff;">
+          <option value="">Category: from file</option>
+          <option>Teacher</option>
+          <option>Admin</option>
+          <option>Nannies</option>
+          <option>Transport</option>
+        </select>
       </div>
       <div class="hint" style="margin-top:8px;">
-        Excel/CSV should have columns for Name, Designation and Employee ID (column names are matched flexibly, e.g. "Employee Name", "Emp ID", "Designation/Role").
+        Excel/CSV columns: Name, Designation, Employee ID and Category (Teacher / Admin / Nannies / Transport). Column names are matched flexibly. Rows with no Category use the dropdown next to the import button.
       </div>
     </div>
 
     <div class="card">
       <h2>Employee Directory <span id="dbBadge" class="db-badge"></span></h2>
+      <div class="chips" id="catChips"></div>
       <div class="field" style="margin-bottom:14px;">
         <input id="empSearch" type="text" placeholder="Search by name, designation or ID…" oninput="renderEmployees()">
       </div>
@@ -257,6 +283,17 @@
       <div>
         <div class="card">
           <h2>Employee Details</h2>
+          <div class="field">
+            <label>Category</label>
+            <select id="empCategory" onchange="onCategoryChange()">
+              <option value="">All categories</option>
+              <option>Teacher</option>
+              <option>Admin</option>
+              <option>Nannies</option>
+              <option>Transport</option>
+            </select>
+            <div class="hint">Pick a category to list only its staff in the name search below.</div>
+          </div>
           <div class="row2">
             <div class="field autocomplete-wrap">
               <label>Employee Name</label>
@@ -499,11 +536,11 @@ async function loadEmployees(){
   try{ return await apiJson('/api/employees') || []; }
   catch(e){ console.error(e); showToast('Could not load the employee directory from the database.'); return []; }
 }
-async function updateEmployeeApi(id, name, designation, employeeId){
+async function updateEmployeeApi(id, name, designation, employeeId, category){
   await apiJson('/api/employees?id=' + encodeURIComponent(id), {
     method: 'PUT',
     headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({ name, designation, employeeId })
+    body: JSON.stringify({ name, designation, employeeId, category })
   });
 }
 async function deleteEmployeeApi(id){
@@ -567,21 +604,36 @@ async function removeHist(id){
 }
 
 /* ============ Employee directory ============ */
+const CATEGORIES = ['Teacher','Admin','Nannies','Transport'];
+let catFilter = 'All';
+
+function normalizeCategory(raw){
+  const s = (raw||'').toString().trim().toLowerCase();
+  if(!s) return '';
+  if(s.includes('teach')) return 'Teacher';
+  if(s.includes('nann') || s.includes('aya') || s.includes('attendant')) return 'Nannies';
+  if(s.includes('transport') || s.includes('driver') || s.includes('conductor') || s.includes('bus')) return 'Transport';
+  if(s.includes('admin') || s.includes('office') || s.includes('clerk') || s.includes('account')) return 'Admin';
+  return '';
+}
+function setCatFilter(c){ catFilter = c; renderEmployees(); }
+function onCategoryChange(){ $('empName').focus(); acOnInput(); }
+
 let employeesCache = [];
 
 function normalizeId(s){ return (s||'').toString().trim().toLowerCase(); }
 
-async function addEmployee(name, designation, employeeId, {silent} = {}){
+async function addEmployee(name, designation, employeeId, category, {silent} = {}){
   name = (name||'').trim();
   designation = (designation||'').trim();
   employeeId = (employeeId||'').trim();
+  category = normalizeCategory(category);
   if(!name) return {ok:false, reason:'missing-name'};
-
   try{
     const result = await apiJson('/api/employees', {
       method: 'POST',
       headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ name, designation, employeeId })
+      body: JSON.stringify({ name, designation, employeeId, category })
     });
     if(!silent){ await renderEmployees(); }
     return { ok:true, updated: !!(result && result.updated) };
@@ -596,11 +648,13 @@ async function addEmployeeFromForm(){
   const name = $('newEmpName').value;
   const designation = $('newEmpDesig').value;
   const employeeId = $('newEmpId').value;
+  const category = $('newEmpCategory').value;
+  if(!category){ showToast('Please choose a category.'); $('newEmpCategory').focus(); return; }
   if(!name.trim()){ showToast('Please enter the employee name.'); $('newEmpName').focus(); return; }
-  const res = await addEmployee(name, designation, employeeId);
+  const res = await addEmployee(name, designation, employeeId, category);
   if(res.ok){
     $('newEmpName').value = ''; $('newEmpDesig').value = ''; $('newEmpId').value = '';
-    showToast(res.updated ? 'Employee record updated.' : 'Employee added to directory.');
+    showToast(res.updated ? 'Employee record updated.' : 'Employee added to ' + category + '.');
   }
 }
 
@@ -624,8 +678,10 @@ async function editEmployee(id){
   if(designation === null) return;
   const employeeId = prompt('Employee ID:', emp.employeeId || '');
   if(employeeId === null) return;
+  const catRaw = prompt('Category (Teacher / Admin / Nannies / Transport):', emp.category || '');
+  if(catRaw === null) return;
   try{
-    await updateEmployeeApi(id, name.trim(), designation.trim(), employeeId.trim());
+    await updateEmployeeApi(id, name.trim(), designation.trim(), employeeId.trim(), normalizeCategory(catRaw));
     await renderEmployees();
     showToast('Employee updated.');
   }catch(e){
@@ -642,19 +698,35 @@ async function renderEmployees(){
   $('empCount').textContent = employeesCache.length ? ('(' + employeesCache.length + ')') : '';
 
   const q = normalizeId($('empSearch') ? $('empSearch').value : '');
-  const filtered = employeesCache.filter(e => !q ||
-    normalizeId(e.name).includes(q) || normalizeId(e.designation).includes(q) || normalizeId(e.employeeId).includes(q));
+  const catOf = e => CATEGORIES.includes(e.category) ? e.category : 'Uncategorized';
+  const groups = [...CATEGORIES, 'Uncategorized'];
+
+  const counts = {};
+  groups.forEach(g => counts[g] = employeesCache.filter(e => catOf(e) === g).length);
+  const chips = ['All', ...groups.filter(g => g !== 'Uncategorized' || counts[g] > 0)];
+  if(!chips.includes(catFilter)) catFilter = 'All';
+  $('catChips').innerHTML = chips.map(c =>
+    `<div class="chip${c === catFilter ? ' active' : ''}" onclick="setCatFilter('${c}')">${c}<span>${c === 'All' ? employeesCache.length : counts[c]}</span></div>`
+  ).join('');
+
+  const visible = employeesCache
+    .filter(e => !q || normalizeId(e.name).includes(q) || normalizeId(e.designation).includes(q) || normalizeId(e.employeeId).includes(q))
+    .filter(e => catFilter === 'All' || catOf(e) === catFilter);
 
   const list = $('empList');
-  if(!filtered.length){
-    list.innerHTML = '<div class="hist-empty">' + (employeesCache.length ? 'No employees match your search.' : 'No employees added yet.') + '</div>';
+  if(!visible.length){
+    list.innerHTML = '<div class="hist-empty">' + (employeesCache.length ? 'No employees match your filter.' : 'No employees added yet.') + '</div>';
     return;
   }
   list.innerHTML = '';
-  filtered
-    .slice()
-    .sort((a,b) => (a.name||'').localeCompare(b.name||''))
-    .forEach(emp => {
+  groups.forEach(g => {
+    const members = visible.filter(e => catOf(e) === g).sort((a,b) => (a.name||'').localeCompare(b.name||''));
+    if(!members.length) return;
+    const head = document.createElement('div');
+    head.className = 'group-head';
+    head.textContent = g + ' · ' + members.length;
+    list.appendChild(head);
+    members.forEach(emp => {
       const div = document.createElement('div');
       div.className = 'emp-item';
       div.innerHTML = `
@@ -672,6 +744,7 @@ async function renderEmployees(){
         </div>`;
       list.appendChild(div);
     });
+  });
 }
 
 function populateEmpSelect(){
@@ -685,10 +758,12 @@ let acHighlight = -1, acMatches = [];
 
 function acFilter(query){
   const q = normalizeId(query);
-  if(!q) return [];
-  return employeesCache
+  const cat = $('empCategory').value;
+  const pool = cat ? employeesCache.filter(e => e.category === cat) : employeesCache;
+  const sorted = pool.slice().sort((a,b) => (a.name||'').localeCompare(b.name||''));
+  if(!q) return cat ? sorted.slice(0, 100) : [];
+  return sorted
     .filter(e => normalizeId(e.name).includes(q) || normalizeId(e.employeeId).includes(q))
-    .sort((a,b) => (a.name||'').localeCompare(b.name||''))
     .slice(0, 8);
 }
 
@@ -698,7 +773,7 @@ function acRender(){
   box.innerHTML = acMatches.map((emp, i) => `
     <div class="suggest-item${i===acHighlight?' hl':''}" data-idx="${i}" onmousedown="acSelect(${i})">
       <div class="s-name">${escapeHtml(emp.name)}</div>
-      <div class="s-meta">${escapeHtml(emp.designation || '—')}${emp.employeeId ? ' · ID: ' + escapeHtml(emp.employeeId) : ''}</div>
+      <div class="s-meta">${$('empCategory').value ? '' : (emp.category ? escapeHtml(emp.category) + ' · ' : '')}${escapeHtml(emp.designation || '—')}${emp.employeeId ? ' · ID: ' + escapeHtml(emp.employeeId) : ''}</div>
     </div>`).join('');
   box.classList.add('show');
 }
@@ -709,6 +784,7 @@ function acSelect(i){
   $('empName').value = emp.name || '';
   $('empDesig').value = emp.designation || '';
   $('empId').value = emp.employeeId || '';
+  if(emp.category) $('empCategory').value = emp.category;
   acMatches = []; acHighlight = -1;
   acRender();
   recalc();
@@ -726,6 +802,7 @@ function acOnInput(){
   if(exact){
     $('empDesig').value = exact.designation || '';
     $('empId').value = exact.employeeId || '';
+    if(exact.category) $('empCategory').value = exact.category;
   }
 }
 
@@ -779,19 +856,22 @@ async function handleImportFile(evt){
     const nameCol = findCol(headers, ['Name','Employee Name','Full Name','Emp Name']);
     const desigCol = findCol(headers, ['Designation','Role','Title','Post']);
     const idCol = findCol(headers, ['Employee ID','Emp ID','ID','Emp Code','Employee Code']);
+    const catCol = findCol(headers, ['Category','Staff Category','Staff Type','Type','Department','Dept']);
 
     if(!nameCol){
       showToast('Could not find a Name column in that file.');
       return;
     }
 
-    let added = 0, updated = 0, skipped = 0;
+    let added = 0, updated = 0, skipped = 0, noCat = 0;
     for(const row of rows){
       const name = row[nameCol];
       const designation = desigCol ? row[desigCol] : '';
       const employeeId = idCol ? row[idCol] : '';
       if(!name || !String(name).trim()){ skipped++; continue; }
-      const res = await addEmployee(String(name), String(designation), String(employeeId), {silent:true});
+      const category = normalizeCategory(catCol ? row[catCol] : '') || $('importCategory').value || '';
+      if(!category) noCat++;
+      const res = await addEmployee(String(name), String(designation), String(employeeId), category, {silent:true});
       if(res.ok && res.updated) updated++;
       else if(res.ok) added++;
       else skipped++;
@@ -799,7 +879,7 @@ async function handleImportFile(evt){
     employeesCache = await loadEmployees();
     renderEmployees();
     populateEmpSelect();
-    showToast(`Import complete — ${added} added, ${updated} updated${skipped ? ', ' + skipped + ' skipped' : ''}.`);
+    showToast(`Import complete — ${added} added, ${updated} updated${skipped ? ', ' + skipped + ' skipped' : ''}${noCat ? ', ' + noCat + ' without category' : ''}.`);
   }catch(e){
     console.error(e);
     showToast('Could not read that file. Please check the format and try again.');
@@ -818,6 +898,7 @@ function showToast(msg){
 
 /* ============ Reset ============ */
 function resetForm(){
+  $('empCategory').value = '';
   document.querySelectorAll('#viewGenerate input, #viewGenerate textarea').forEach(el=>{
     if(el.id === 'remarks'){ el.value = "This salary slip has been issued at the request of the employee for loan purposes only."; }
     else { el.value = ''; }
@@ -1038,6 +1119,7 @@ async function generateSlip(){
     id: (crypto.randomUUID ? crypto.randomUUID() : String(Date.now())),
     createdAt: Date.now(),
     empName: $('empName').value.trim(),
+    category: $('empCategory').value || ((employeesCache.find(e => normalizeId(e.name) === normalizeId($('empName').value)) || {}).category || ''),
     empDesig: $('empDesig').value.trim(),
     empId: $('empId').value.trim(),
     empMonth: $('empMonth').value,
@@ -1055,7 +1137,7 @@ async function generateSlip(){
     const doc = buildPdf(rec);
     doc.save(pdfFileName(rec));
     await saveRecord(rec);
-    await addEmployee(rec.empName, rec.empDesig, rec.empId, {silent:true});
+    await addEmployee(rec.empName, rec.empDesig, rec.empId, rec.category, {silent:true});
     showToast('Salary slip generated and saved to history.');
   }catch(e){
     console.error(e);
